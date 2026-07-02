@@ -1,0 +1,7 @@
+db:
+  password: "![ENC(dev_db_password_encrypted)]"
+
+#email:
+#  smtp:
+#    user: "![ENC(dev_smtp_user_encrypted)]"
+#    password: "![ENC(dev_smtp_password_encrypted)]"

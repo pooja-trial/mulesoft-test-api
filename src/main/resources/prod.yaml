@@ -1,0 +1,39 @@
+http:
+  listener:
+    host: "0.0.0.0"
+    port: "8081"
+    basePath: "/api"
+
+db:
+  host: "prod-db-host.mycompany.com"
+  port: "3306"
+  user: "prod_user"
+  # password: defined in prod-secure.yaml — never store plaintext credentials here (SAST-001)
+  database: "customers_db"
+  poolSize: "20"
+  pool:
+    minSize: "5"
+    maxSize: "20"
+    maxWait: "5000"
+    maxIdleTime: "60000"
+
+email:
+  smtp:
+    host: "smtp.mycompany.com"
+    port: "465"
+    user: "integration-prod@mycompany.com"
+    # password: defined in prod-secure.yaml — never store plaintext credentials here (SAST-001)
+    from: "integration-prod@mycompany.com"
+    to: "ops-team@mycompany.com"
+    subject: "p-customers-api | Customer Upsert Failure"
+    tls:
+      insecure: "false"   # PROD: must always be false with production trust-store (SAST-002)
+
+# SECURITY NOTES (PROD environment):
+# - TLS insecure=true is STRICTLY PROHIBITED in PROD. Use tls:trust-store with production SMTP cert.
+# - HTTP listener MUST be behind HTTPS-terminating Flex Gateway or load balancer. Never expose 8081 publicly.
+# - Client ID Enforcement + Rate Limiting + Spike Control policies MUST be applied in API Manager.
+# - All *-secure.yaml files must use Mule Secure Properties with AES-256 encryption key stored in Secrets Manager.
+max:
+  batch:
+    size: "100"

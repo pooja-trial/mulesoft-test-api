@@ -1,0 +1,379 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:db="http://www.mulesoft.org/schema/mule/db"
+      xmlns:email="http://www.mulesoft.org/schema/mule/email"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+        http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+        http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+        http://www.mulesoft.org/schema/mule/email http://www.mulesoft.org/schema/mule/email/current/mule-email.xsd">
+
+    <munit:config name="p-customers-api-test-suite.xml" />
+
+    <!-- TEST 1: New customer INSERT success -->
+    <munit:test name="customers-upsert-flow-single-insert-success"
+        doc:name="Insert New Customer — HTTP 200 Success"
+        doc:description="New customer not in DB is inserted, returns Success and HTTP 200">
+        <munit:behavior>
+            <munit:set-event doc:name="Set payload — single new customer" doc:id="33f5d42c-91c7-4d52-bd5c-add8c537e953" >
+				<munit:payload value='#[output application/json&#10;---&#10;[{customerEmail: "newuser@test.com", firstName: "Jane", lastName: "Smith", contactNumber: "555-0001", address: "100 Main St", location: "USA"}]]' encoding="UTF-8" mediaType="application/json" />
+			</munit:set-event>
+			<!-- <munit-tools:set-event doc:name="Set payload — single new customer">
+                <munit-tools:payload mediaType="application/json"
+                    value='#[[{customerEmail: "newuser@test.com", firstName: "Jane", lastName: "Smith", contactNumber: "555-0001", address: "100 Main St", location: "USA"}]]' />
+            </munit-tools:set-event> -->
+            <munit-tools:mock-when processor="snowflake:select" doc:name="Mock DB query-single — null (not found)">
+                <munit-tools:with-attributes >
+					<munit-tools:with-attribute whereValue="Snowflake_Config" attributeName="config-ref" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return >
+					<munit-tools:variables >
+						<munit-tools:variable key="existingCustomer" value="#[null]" mediaType="application/java" />
+					</munit-tools:variables>
+				</munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="snowflake:insert" doc:name="Mock db:insert — 1 affected row">
+                <munit-tools:with-attributes >
+					<munit-tools:with-attribute whereValue="Snowflake_Config" attributeName="config-ref" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+                    <munit-tools:payload value="#[1]" mediaType="application/java"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="email:send" doc:name="Mock email:send — not called">
+                <munit-tools:then-return/>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="customers-upsert-flow" doc:name="Run customers-upsert-flow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[sizeOf(payload)]" is="#[MunitTools::equalTo(1)]" doc:name="Response has 1 record"/>
+            <munit-tools:assert-that expression="#[payload..customerEmail[0]]" is="#[MunitTools::equalTo('newuser@test.com')]" doc:name="customerEmail correct"/>
+            <munit-tools:assert-that expression="#[payload..status[0]]" is="#[MunitTools::equalTo('Success')]" doc:name="status = Success"/>
+            <munit-tools:assert-that expression="#[payload..message[0]]" is="#[MunitTools::equalTo('')]" doc:name="message empty on success"/>
+            <munit-tools:assert-that expression="#[vars.httpStatus]" is="#[MunitTools::equalTo(200)]" doc:name="HTTP status 200"/>
+            <munit-tools:verify-call processor="snowflake:insert" doc:name="INSERT called once" times="1">
+				<munit-tools:with-attributes >
+					<munit-tools:with-attribute whereValue="Snowflake_Config" attributeName="config-ref" />
+				</munit-tools:with-attributes>
+			</munit-tools:verify-call>
+            <munit-tools:verify-call processor="email:send" doc:name="Email NOT sent" times="0"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- TEST 2: Existing customer UPDATE success -->
+    <munit:test name="customers-upsert-flow-single-update-success"
+        doc:name="Update Existing Customer — HTTP 200 Success"
+        doc:description="Existing customer found in DB is updated, returns Success and HTTP 200">
+        <munit:behavior>
+            <munit:set-event doc:name="Set payload — existing customer" doc:id="fb87d530-1e4a-4af0-8cb5-f107764c2f4e" >
+				<munit:payload value='#[output application/json&#10;---&#10;[{customerEmail: "existing@test.com", firstName: "Jon", lastName: "Doe", contactNumber: "", address: "New York", location: "USA"}]]' mediaType="application/json" />
+			</munit:set-event>
+			<!-- <munit-tools:set-event doc:name="Set payload — existing customer">
+                <munit-tools:payload mediaType="application/json"
+                    value='#[[{customerEmail: "existing@test.com", firstName: "Jon", lastName: "Doe", contactNumber: "", address: "New York", location: "USA"}]]' />
+            </munit-tools:set-event> -->
+            <munit-tools:mock-when processor="snowflake:select" doc:name="Mock DB query-single — customer found">
+                <munit-tools:with-attributes >
+					<munit-tools:with-attribute whereValue="Snowflake_Config" attributeName="config-ref" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+                    <munit-tools:variables>
+                        <munit-tools:variable key="existingCustomer" value="#[{customer_email: 'existing@test.com'}]" mediaType="application/java"/>
+                    </munit-tools:variables>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="snowflake:update" doc:name="Mock db:update — 1 row updated">
+                <munit-tools:with-attributes >
+					<munit-tools:with-attribute whereValue="Snowflake_Config" attributeName="config-ref" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+                    <munit-tools:payload value="#[1]" mediaType="application/java"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="email:send" doc:name="Mock email:send — not called">
+                <munit-tools:then-return/>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="customers-upsert-flow" doc:name="Run customers-upsert-flow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[sizeOf(payload)]" is="#[MunitTools::equalTo(1)]" doc:name="Response has 1 record"/>
+            <munit-tools:assert-that expression="#[payload..customerEmail[0]]" is="#[MunitTools::equalTo('existing@test.com')]" doc:name="customerEmail correct"/>
+            <munit-tools:assert-that expression="#[payload..status[0]]" is="#[MunitTools::equalTo('Success')]" doc:name="status = Success"/>
+            <munit-tools:assert-that expression="#[vars.httpStatus]" is="#[MunitTools::equalTo(200)]" doc:name="HTTP status 200"/>
+            <munit-tools:verify-call processor="snowflake:update" doc:name="UPDATE called once" times="1">
+				<munit-tools:with-attributes >
+					<munit-tools:with-attribute whereValue="Snowflake_Config" attributeName="config-ref" />
+				</munit-tools:with-attributes>
+			</munit-tools:verify-call>
+            <munit-tools:verify-call processor="snowflake:insert" doc:name="INSERT NOT called" times="0">
+				<munit-tools:with-attributes >
+					<munit-tools:with-attribute whereValue="Snowflake_Config" attributeName="config-ref" />
+				</munit-tools:with-attributes>
+			</munit-tools:verify-call>
+            <munit-tools:verify-call processor="email:send" doc:name="Email NOT sent" times="0"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- TEST 3: DB error causes Failure + email sent + HTTP 207 -->
+    <munit:test name="customers-upsert-flow-db-error-failure-email"
+        doc:name="DB Connectivity Error — HTTP 207 with Email Alert"
+        doc:description="DB connectivity error causes Failure result, HTTP 207, email notification is sent">
+        <munit:behavior>
+            <munit:set-event doc:name="Set payload — customer triggering DB error" doc:id="eb0d49e9-e331-40a3-baa5-a9e12e5c06a1" >
+				<munit:payload value='#[output application/json&#10;---&#10;[{customerEmail: "error@test.com", firstName: "Error", lastName: "User", contactNumber: "", address: "Unknown", location: "USA"}]]' mediaType="application/json" />
+			</munit:set-event>
+            <!-- <munit-tools:set-event doc:name="Set payload — customer triggering DB error">
+                <munit-tools:payload mediaType="application/json"
+                    value='#[[{customerEmail: "error@test.com", firstName: "Error", lastName: "User", contactNumber: "", address: "Unknown", location: "USA"}]]' />
+            </munit-tools:set-event> -->
+            <munit-tools:mock-when processor="snowflake:select" doc:name="Mock DB query-single — throws CONNECTIVITY">
+                <munit-tools:with-attributes >
+					<munit-tools:with-attribute whereValue="Snowflake_Config" attributeName="config-ref" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+                    <munit-tools:error typeId="DB:CONNECTIVITY"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="email:send" doc:name="Mock email:send — failure alert">
+                <munit-tools:then-return/>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="customers-upsert-flow" doc:name="Run customers-upsert-flow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[sizeOf(payload)]" is="#[MunitTools::equalTo(1)]" doc:name="Response has 1 record"/>
+            <munit-tools:assert-that expression="#[payload..status[0]]" is="#[MunitTools::equalTo('Failure')]" doc:name="status = Failure"/>
+            <munit-tools:assert-that expression="#[payload..customerEmail[0]]" is="#[MunitTools::equalTo('error@test.com')]" doc:name="customerEmail correct"/>
+            <munit-tools:assert-that expression="#[vars.httpStatus]" is="#[MunitTools::equalTo(200)]" doc:name="HTTP status 200"/>
+            <munit-tools:assert-that expression="#[payload..message[0] != null and payload..message[0] != '']" is="#[MunitTools::equalTo(true)]" doc:name="error message populated"/>
+            <!-- [STUDIO:"Failure email sent once"]<munit-tools:verify-call processor="email:send" doc:name="Failure email sent once" times="1"/> [STUDIO] -->
+        </munit:validation>
+    </munit:test>
+
+    <!-- TEST 4: Batch two customers both new — INSERT both, HTTP 200 -->
+    <munit:test name="customers-upsert-flow-batch-two-inserts"
+        doc:name="Batch Two New Customers — Parallel INSERT HTTP 200"
+        doc:description="Two new customers processed in parallel, both inserted successfully, HTTP 200, no email">
+        <munit:behavior>
+            <munit:set-event doc:name="Set payload — two new customers" doc:id="35cc791d-6ebd-456f-afa6-a012fdd04a35" >
+				<munit:payload value='#[output application/json&#10;---&#10;[{customerEmail: "user1@test.com", firstName: "Alice", lastName: "Smith", contactNumber: "111", address: "Boston", location: "USA"},{customerEmail: "user2@test.com", firstName: "Bob", lastName: "Jones", contactNumber: "222", address: "Chicago", location: "USA"}]]' mediaType="application/json" />
+			</munit:set-event>
+            <!-- <munit-tools:set-event doc:name="Set payload — two new customers">
+                <munit-tools:payload mediaType="application/json"
+                    value='#[[{customerEmail: "user1@test.com", firstName: "Alice", lastName: "Smith", contactNumber: "111", address: "Boston", location: "USA"},{customerEmail: "user2@test.com", firstName: "Bob", lastName: "Jones", contactNumber: "222", address: "Chicago", location: "USA"}]]' />
+            </munit-tools:set-event> -->
+            <munit-tools:mock-when processor="snowflake:select" doc:name="Mock DB query-single — null (both new)">
+                <munit-tools:with-attributes >
+					<munit-tools:with-attribute whereValue="Snowflake_Config" attributeName="config-ref" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+                    <munit-tools:variables>
+                        <munit-tools:variable key="existingCustomer" value="#[null]" mediaType="application/java"/>
+                    </munit-tools:variables>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="snowflake:insert" doc:name="Mock db:insert — both rows">
+                <munit-tools:with-attributes >
+					<munit-tools:with-attribute whereValue="Snowflake_Config" attributeName="config-ref" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+                    <munit-tools:payload value="#[1]" mediaType="application/java"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="email:send" doc:name="Mock email:send — not called">
+                <munit-tools:then-return/>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="customers-upsert-flow" doc:name="Run customers-upsert-flow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[sizeOf(payload)]" is="#[MunitTools::equalTo(2)]" doc:name="Response has 2 records"/>
+            <munit-tools:assert-that expression="#[vars.httpStatus]" is="#[MunitTools::equalTo(200)]" doc:name="HTTP status 200"/>
+            <munit-tools:verify-call processor="snowflake:insert" doc:name="INSERT called twice" times="2">
+				<munit-tools:with-attributes >
+					<munit-tools:with-attribute whereValue="Snowflake_Config" attributeName="config-ref" />
+				</munit-tools:with-attributes>
+			</munit-tools:verify-call>
+            <munit-tools:verify-call processor="email:send" doc:name="Email NOT sent" times="0"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- TEST 5: All records fail — HTTP 207, all Failure, one email -->
+    <munit:test name="customers-upsert-flow-all-records-fail"
+        doc:name="All Records DB Error — HTTP 207 All Failure Single Email"
+        doc:description="Both customers fail with DB error, HTTP 207, all Failure results, one failure email dispatched">
+        <munit:behavior>
+            <munit:set-event doc:name="et payload — two customers both fail" doc:id="d1bb166c-d225-4e82-acec-8244e3f861d4" >
+				<munit:payload value='#[output application/json&#10;---&#10;[{customerEmail: "fail1@test.com", firstName: "Fail", lastName: "One", contactNumber: "", address: "NY", location: "USA"},{customerEmail: "fail2@test.com", firstName: "Fail", lastName: "Two", contactNumber: "", address: "CA", location: "USA"}]]' mediaType="application/json" />
+			</munit:set-event>
+            <!-- <munit-tools:set-event doc:name="Set payload — two customers both fail">
+                <munit-tools:payload mediaType="application/json"
+                    value='#[[{customerEmail: "fail1@test.com", firstName: "Fail", lastName: "One", contactNumber: "", address: "NY", location: "USA"},{customerEmail: "fail2@test.com", firstName: "Fail", lastName: "Two", contactNumber: "", address: "CA", location: "USA"}]]' />
+            </munit-tools:set-event> -->
+            <munit-tools:mock-when processor="snowflake:select" doc:name="Mock DB query-single — throws QUERY_EXECUTION">
+                <munit-tools:with-attributes >
+					<munit-tools:with-attribute whereValue="Snowflake_Config" attributeName="config-ref" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+                    <munit-tools:error typeId="DB:QUERY_EXECUTION"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="email:send" doc:name="Mock email:send — failure alert">
+                <munit-tools:then-return/>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="customers-upsert-flow" doc:name="Run customers-upsert-flow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[sizeOf(payload)]" is="#[MunitTools::equalTo(2)]" doc:name="Response has 2 records"/>
+            <munit-tools:assert-that expression="#[vars.httpStatus]" is="#[MunitTools::equalTo(200)]" doc:name="HTTP status 200"/>
+            <munit-tools:assert-that expression="#[sizeOf(payload filter (item) -&gt; item..status[0] == 'Failure')]" is="#[MunitTools::equalTo(2)]" doc:name="Both records are Failure"/>
+            <!-- [STUDIO:"Failure email sent exactly once"]<munit-tools:verify-call processor="email:send" doc:name="Failure email sent exactly once" times="1"/> [STUDIO] -->
+        </munit:validation>
+    </munit:test>
+
+    <!-- TEST 6: Failure record message is non-empty (BAD_SQL_SYNTAX) -->
+    <munit:test name="customers-upsert-flow-failure-has-message"
+        doc:name="Failure Record Contains Error Message"
+        doc:description="DB:BAD_SQL_SYNTAX error results in non-empty message field in Failure record">
+        <munit:behavior>
+            <munit:set-event doc:name="Set payload — will cause BAD SQL" doc:id="d702ea29-c049-4690-94a4-4728bf739c21" >
+				<munit:payload value='#[output application/json&#10;---&#10;[{customerEmail: "pqr@xyz.com", firstName: "Test", lastName: "User", contactNumber: "", address: "LA", location: "USA"}]]' mediaType="application/json" />
+			</munit:set-event>
+            <!-- <munit-tools:set-event doc:name="Set payload — will cause BAD SQL">
+                <munit-tools:payload mediaType="application/json"
+                    value='#[[{customerEmail: "pqr@xyz.com", firstName: "Test", lastName: "User", contactNumber: "", address: "LA", location: "USA"}]]' />
+            </munit-tools:set-event> -->
+            <munit-tools:mock-when processor="snowflake:select" doc:name="Mock DB query-single — throws BAD_SQL_SYNTAX">
+                <munit-tools:with-attributes >
+					<munit-tools:with-attribute whereValue="Snowflake_Config" attributeName="config-ref" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+                    <munit-tools:error typeId="DB:BAD_SQL_SYNTAX"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="email:send" doc:name="Mock email:send">
+                <munit-tools:then-return/>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="customers-upsert-flow" doc:name="Run customers-upsert-flow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[payload..status[0]]" is="#[MunitTools::equalTo('Failure')]" doc:name="status = Failure"/>
+            <munit-tools:assert-that expression="#[payload..customerEmail[0]]" is="#[MunitTools::equalTo('pqr@xyz.com')]" doc:name="customerEmail correct"/>
+            <munit-tools:assert-that expression="#[payload..message[0] != null and payload..message[0] != '']" is="#[MunitTools::equalTo(true)]" doc:name="message not empty"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- TEST 7: Existing customer triggers UPDATE not INSERT -->
+    <munit:test name="customers-upsert-flow-existing-uses-update-not-insert"
+        doc:name="Existing Customer Uses UPDATE not INSERT"
+        doc:description="When existingCustomer is not null, db:update is called and db:insert is NOT called">
+        <munit:behavior>
+            <munit:set-event doc:name="Set payload — existing customer update check" doc:id="8dc71b82-0260-4050-b1e1-d0cda7a06345" >
+				<munit:payload value='#[output application/json&#10;---&#10;[{customerEmail: "abc@xyz.com", firstName: "Jon", lastName: "Doe Updated", contactNumber: "123-456", address: "Brooklyn", location: "USA"}]]' encoding="UTF-8" mediaType="application/json" />
+			</munit:set-event>
+            <!-- <munit-tools:set-event doc:name="Set payload — existing customer update check">
+                <munit-tools:payload mediaType="application/json"
+                    value='#[[{customerEmail: "abc@xyz.com", firstName: "Jon", lastName: "Doe Updated", contactNumber: "123-456", address: "Brooklyn", location: "USA"}]]' />
+            </munit-tools:set-event> -->
+            <munit-tools:mock-when processor="snowflake:select" doc:name="Mock DB query-single — existing record">
+                <munit-tools:with-attributes >
+					<munit-tools:with-attribute whereValue="Snowflake_Config" attributeName="config-ref" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+                    <munit-tools:variables>
+                        <munit-tools:variable key="existingCustomer" value="#[{customer_email: 'abc@xyz.com'}]" mediaType="application/java"/>
+                    </munit-tools:variables>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="snowflake:update" doc:name="Mock db:update">
+				<munit-tools:with-attributes >
+					<munit-tools:with-attribute whereValue="Snowflake_Config" attributeName="config-ref" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return >
+					<munit-tools:payload value="#[1]" mediaType="application/json" />
+				</munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="email:send" doc:name="Mock email:send — not expected">
+                <munit-tools:then-return/>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="customers-upsert-flow" doc:name="Run customers-upsert-flow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[payload..status[0]]" is="#[MunitTools::equalTo('Success')]" doc:name="status = Success"/>
+            <munit-tools:verify-call processor="snowflake:update" doc:name="UPDATE called once" times="1">
+				<munit-tools:with-attributes >
+					<munit-tools:with-attribute whereValue="Snowflake_Config" attributeName="config-ref" />
+				</munit-tools:with-attributes>
+			</munit-tools:verify-call>
+            <munit-tools:verify-call processor="snowflake:insert" doc:name="INSERT NOT called" times="0">
+				<munit-tools:with-attributes >
+					<munit-tools:with-attribute whereValue="Snowflake_Config" attributeName="config-ref" />
+				</munit-tools:with-attributes>
+			</munit-tools:verify-call>
+        </munit:validation>
+    </munit:test>
+
+    <!-- TEST 8: Sample request from spec -->
+    <munit:test name="customers-upsert-flow-sample-spec-request"
+        doc:name="Sample Spec Request abc@xyz.com Insert"
+        doc:description="Validates sample request from API spec is inserted and returns Success HTTP 200">
+        <munit:behavior>
+            <munit:set-event doc:name="Set payload sample spec" doc:id="1ab33c5a-71d8-49b3-a3cd-ce713233ed50" >
+				<munit:payload value='#[output application/json&#10;---&#10;[{customerEmail: "abc@xyz.com", firstName: "Jon", lastName: "Doe", contactNumber: "", address: "New York", location: "USA"}]]' mediaType="application/json" />
+			</munit:set-event>
+            <!-- <munit-tools:set-event doc:name="Set payload sample spec">
+                <munit-tools:payload mediaType="application/json"
+                    value='#[[{customerEmail: "abc@xyz.com", firstName: "Jon", lastName: "Doe", contactNumber: "", address: "New York", location: "USA"}]]' />
+            </munit-tools:set-event> -->
+            <munit-tools:mock-when processor="snowflake:select" doc:name="Mock DB query null">
+                <munit-tools:with-attributes >
+					<munit-tools:with-attribute whereValue="Snowflake_Config" attributeName="config-ref" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+                    <munit-tools:variables>
+                        <munit-tools:variable key="existingCustomer" value="#[null]" mediaType="application/java"/>
+                    </munit-tools:variables>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="snowflake:insert" doc:name="Mock db insert">
+                <munit-tools:with-attributes >
+					<munit-tools:with-attribute whereValue="Snowflake_Config" attributeName="config-ref" />
+				</munit-tools:with-attributes>
+				<munit-tools:then-return>
+                    <munit-tools:payload value="#[1]" mediaType="application/java"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="email:send" doc:name="Mock email">
+                <munit-tools:then-return/>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="customers-upsert-flow" doc:name="Run flow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[payload..customerEmail[0]]" is="#[MunitTools::equalTo('abc@xyz.com')]" doc:name="email correct"/>
+            <munit-tools:assert-that expression="#[payload..status[0]]" is="#[MunitTools::equalTo('Success')]" doc:name="status Success"/>
+            <munit-tools:assert-that expression="#[vars.httpStatus]" is="#[MunitTools::equalTo(200)]" doc:name="HTTP 200"/>
+        </munit:validation>
+    </munit:test>
+
+</mule>

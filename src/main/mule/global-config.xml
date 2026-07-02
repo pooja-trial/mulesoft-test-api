@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:snowflake="http://www.mulesoft.org/schema/mule/snowflake"
+      xmlns:email="http://www.mulesoft.org/schema/mule/email"
+      xmlns:tls="http://www.mulesoft.org/schema/mule/tls"
+      xmlns:secure-properties="http://www.mulesoft.org/schema/mule/secure-properties"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/snowflake http://www.mulesoft.org/schema/mule/snowflake/current/mule-snowflake.xsd
+        http://www.mulesoft.org/schema/mule/email http://www.mulesoft.org/schema/mule/email/current/mule-email.xsd
+        http://www.mulesoft.org/schema/mule/tls http://www.mulesoft.org/schema/mule/tls/current/mule-tls.xsd
+        http://www.mulesoft.org/schema/mule/secure-properties http://www.mulesoft.org/schema/mule/secure-properties/current/mule-secure-properties.xsd">
+
+    <!-- ===================== Secure Properties ===================== -->
+    <!-- Algorithm: AES | Mode: CBC | Key passed at runtime via -M-Dencryption.key=welcometmulesoft -->
+    <secure-properties:config
+        name="Secure_Properties_Config"
+        file="local.secure.properties"
+        key="${encryption.key}"
+        doc:name="Secure Properties Config"
+        doc:description="Loads AES/CBC encrypted properties from local.secure.properties using the runtime-supplied encryption key">
+        <secure-properties:encrypt algorithm="AES" mode="CBC" />
+    </secure-properties:config>
+
+    <!-- ===================== Environment Properties ===================== -->
+    <configuration-properties
+        file="${env}.yaml"
+        doc:name="Environment Properties"
+        doc:description="Loads environment-specific configuration from dev/uat/prod YAML files" />
+
+    <!-- ===================== HTTP Listener Config ===================== -->
+    <http:listener-config
+        name="HTTP_Listener_Config"
+        basePath="${http.listener.basePath}"
+        doc:name="HTTP Listener Config"
+        doc:description="HTTP listener configuration for the p-customers-api on port 8081">
+        <http:listener-connection
+            host="${http.listener.host}"
+            port="${http.listener.port}" />
+    </http:listener-config>
+
+    <!-- ===================== Snowflake Database Config ===================== -->
+    <!-- Replaced MySQL DB connector. Credentials sourced from YAML + secure properties. -->
+    <!-- Password stored encrypted in local.secure.properties as snowflake.password -->
+    <snowflake:snowflake-config
+        name="Snowflake_Config"
+        doc:name="Snowflake Config"
+        doc:description="Snowflake connection for the CUSTOMERS table — account jp84716.ap-southeast-7.aws, database CUSTOMERS_DB">
+        <snowflake:snowflake-connection
+            accountName="${snowflake.accountName}"
+            warehouse="${snowflake.warehouse}"
+            database="${snowflake.database}"
+            schema="${snowflake.schema}"
+            user="${snowflake.user}"
+            password="${secure::snowflake.password}" role="ACCOUNTADMIN"/>
+    </snowflake:snowflake-config>
+
+    <!-- ===================== Email SMTP Config ===================== -->
+    <!-- <email:smtp-config
+        name="Email_SMTP_Config"
+        from="${email.smtp.from}"
+        doc:name="Email SMTP Config"
+        doc:description="SMTPS (TLS) email configuration for sending failure notification emails">
+        <email:smtps-connection
+            host="${email.smtp.host}"
+            port="${email.smtp.port}"
+            user="${email.smtp.user}"
+            password="${email.smtp.password}">
+            <tls:context>
+                <tls:trust-store insecure="${email.smtp.tls.insecure}" />
+            </tls:context>
+        </email:smtps-connection>
+    </email:smtp-config> -->
+
+    <!-- ===================== Global Error Handler ===================== -->
+    <error-handler
+        name="global-error-handler"
+        doc:name="Global Error Handler"
+        doc:description="Handles all uncaught errors globally, returning a structured 500 JSON response">
+        <on-error-propagate
+            type="MULE:ANY"
+            doc:name="On Error Propagate Any"
+            doc:description="Catches any uncaught error, logs it, and propagates a 500 error response">
+            <logger
+                level="ERROR"
+                message="#['[p-customers-api] Unhandled error | correlationId=' ++ (vars.correlationId default 'N/A') ++ ' | errorType=' ++ error.errorType]"
+                doc:name="Log Unhandled Error"
+                doc:description="Logs unhandled errors with correlationId and errorType for diagnostics" />
+        </on-error-propagate>
+    </error-handler>
+
+</mule>

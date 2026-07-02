@@ -1,0 +1,175 @@
+#%RAML 1.0
+title: Customers API
+version: v1
+baseUri: http://localhost:8081/api
+mediaType: application/json
+
+securitySchemes:
+  client_id_enforcement:
+    description: Client ID enforcement security scheme for API access control
+    type: Pass Through
+    describedBy:
+      headers:
+        client_id:
+          type: string
+          required: true
+          description: Client application ID
+        client_secret:
+          type: string
+          required: true
+          description: Client application secret
+
+types:
+  CustomerRequest:
+    description: Represents a single customer record for upsert processing
+    type: object
+    properties:
+      customerEmail:
+        type: string
+        required: true
+        description: Unique email identifier for the customer
+        example: abc@xyz.com
+      firstName:
+        type: string
+        required: true
+        description: Customer's first name
+        example: Jon
+      lastName:
+        type: string
+        required: true
+        description: Customer's last name
+        example: Doe
+      contactNumber:
+        type: string
+        required: false
+        description: Customer's contact phone number
+        example: "+1-555-1234"
+      address:
+        type: string
+        required: false
+        description: Customer's mailing address
+        example: New York
+      location:
+        type: string
+        required: false
+        description: Customer's country or region
+        example: USA
+
+  CustomerResponse:
+    description: Upsert result for a single customer record
+    type: object
+    properties:
+      customerEmail:
+        type: string
+        required: true
+        description: Email of the processed customer
+        example: abc@xyz.com
+      status:
+        type: string
+        required: true
+        description: Processing status — Success or Failure
+        enum: [Success, Failure]
+        example: Success
+      message:
+        type: string
+        required: false
+        description: Error message when status is Failure; empty string on Success
+        example: ""
+
+  CustomerRequestArray:
+    description: Array of customer records for batch upsert
+    type: CustomerRequest[]
+
+  CustomerResponseArray:
+    description: Array of upsert results, one per input record
+    type: CustomerResponse[]
+
+  ErrorResponse:
+    description: Standard error response
+    type: object
+    properties:
+      status:
+        type: string
+        example: Error
+      message:
+        type: string
+        example: An unexpected error occurred
+
+/customers:
+  description: Customer records management endpoint — supports batch upsert (create or update) in parallel
+  post:
+    description: |
+      Accepts a JSON array of customer records and performs parallel upsert operations.
+      For each record:
+        - If a customer with the same email exists → UPDATE the record
+        - If no customer with the email exists → INSERT a new record
+      All records are processed concurrently for maximum performance.
+      Returns a consolidated response array with per-record status.
+      On any failures, an email notification is sent to the operations team.
+    securedBy: [client_id_enforcement]
+    body:
+      application/json:
+        type: CustomerRequestArray
+        example: |
+          [
+            {
+              "customerEmail": "abc@xyz.com",
+              "firstName": "Jon",
+              "lastName": "Doe",
+              "contactNumber": "",
+              "address": "New York",
+              "location": "USA"
+            }
+          ]
+    responses:
+      200:
+        description: All customer records processed successfully
+        body:
+          application/json:
+            type: CustomerResponseArray
+            example: |
+              [
+                {
+                  "customerEmail": "abc@xyz.com",
+                  "status": "Success",
+                  "message": ""
+                }
+              ]
+      207:
+        description: Partial success — one or more records failed processing
+        body:
+          application/json:
+            type: CustomerResponseArray
+            example: |
+              [
+                {
+                  "customerEmail": "abc@xyz.com",
+                  "status": "Success",
+                  "message": ""
+                },
+                {
+                  "customerEmail": "pqr@xyz.com",
+                  "status": "Failure",
+                  "message": "Duplicate entry for key 'customers.customer_email'"
+                }
+              ]
+      400:
+        description: Invalid request payload — not a JSON array or missing required fields
+        body:
+          application/json:
+            type: ErrorResponse
+            example: |
+              {
+                "status": "Error",
+                "message": "Request payload must be a JSON array of customer records"
+              }
+      500:
+        description: Internal server error
+        body:
+          application/json:
+            type: ErrorResponse
+            example: |
+              {
+                "status": "Error",
+                "message": "An unexpected error occurred"
+              }

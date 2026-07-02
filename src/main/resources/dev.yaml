@@ -1,0 +1,31 @@
+http:
+  listener:
+    host: "0.0.0.0"
+    port: "8081"
+    basePath: "/api"
+
+# Snowflake connection — replaces MySQL DB connector
+# Password stored encrypted in local.secure.properties (AES/CBC key: welcometmulesoft)
+snowflake:
+  accountName: "jp84716.ap-southeast-7.aws"
+  warehouse: "COMPUTE_WH"
+  database: "CUSTOMER_DB"
+  schema: "PUBLIC"
+  user: "SUCHI"
+  table: "CUSTOMER"
+
+email:
+  smtp:
+    host: "smtp.gmail.com"
+    port: "465"
+    user: "integration-dev@mycompany.com"
+    # password: defined in dev-secure.yaml
+    from: "integration-dev@mycompany.com"
+    to: "ops-team@mycompany.com"
+    subject: "p-customers-api | Customer Upsert Failure"
+    tls:
+      insecure: "true"
+
+max:
+  batch:
+    size: "100"

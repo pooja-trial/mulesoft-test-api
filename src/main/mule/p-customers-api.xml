@@ -1,0 +1,218 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:snowflake="http://www.mulesoft.org/schema/mule/snowflake"
+      xmlns:email="http://www.mulesoft.org/schema/mule/email"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/snowflake http://www.mulesoft.org/schema/mule/snowflake/current/mule-snowflake.xsd
+        http://www.mulesoft.org/schema/mule/email http://www.mulesoft.org/schema/mule/email/current/mule-email.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <flow name="customers-upsert-flow"
+          doc:name="customers-upsert-flow"
+          doc:description="POST /customers — parallel Snowflake upsert per record, email alert on failures">
+
+        <http:listener config-ref="HTTP_Listener_Config" path="/customers" allowedMethods="POST"
+            doc:name="POST /customers"
+            doc:description="Accepts HTTP POST with a JSON array of customer records for Snowflake upsert">
+            <http:response statusCode="#[vars.httpStatus default 200]" />
+            <http:error-response statusCode="500">
+                <http:body><![CDATA[#[output application/json --- {status: "Error", message: "An internal error occurred. Contact support with correlationId: " ++ (vars.correlationId default correlationId)}]]]></http:body>
+            </http:error-response>
+        </http:listener>
+
+        <set-variable variableName="correlationId" value="#[correlationId]"
+            doc:name="Set Correlation ID"
+            doc:description="Captures Mule correlation ID for structured logging" />
+
+        <logger level="INFO"
+            message="#[%dw 2.0 output application/json&#10;---&#10;'[p-customers-api] Request received | correlationId=' ++ vars.correlationId ++ ' | recordCount=' ++ sizeOf(payload)]"
+            doc:name="Log Request Received"
+            doc:description="Logs inbound request with correlationId and record count" />
+
+        <ee:transform doc:name="Validate Request — Array Type and Batch Size"
+            doc:description="Validates JSON array and max batch size limit (default 100)">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+if (not (payload is Array))
+    error("Request payload must be a JSON array of customer records")
+else if (sizeOf(payload) == 0)
+    error("Request payload must contain at least one customer record")
+else if (sizeOf(payload) > (Mule::p('max.batch.size') as Number default 100))
+    error("Batch size " ++ sizeOf(payload) ++ " exceeds maximum of " ++ (Mule::p('max.batch.size') default "100") ++ " records per request")
+else payload]]></ee:set-payload>
+            </ee:message>
+            <ee:variables>
+                <ee:set-variable variableName="httpStatus"><![CDATA[200]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+
+        <parallel-foreach collection="#[payload]"
+            doc:name="Process Customers in Parallel"
+            doc:description="Processes each customer concurrently against Snowflake CUSTOMERS_DB.PUBLIC.CUSTOMERS">
+
+            <try doc:name="Try: Upsert Single Customer"
+                doc:description="Upserts one customer in Snowflake; captures errors as Failure results">
+
+                <set-variable variableName="currentCustomer" value="#[payload]"
+                    doc:name="Store Current Customer"
+                    doc:description="Preserves current customer record before Snowflake operations" />
+
+                <ee:transform doc:name="Validate customerEmail Format"
+                    doc:description="Validates RFC-5321 email format; throws on null/empty/invalid/too-long">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+if (vars.currentCustomer.customerEmail == null or vars.currentCustomer.customerEmail == "")
+    error("customerEmail is required and cannot be empty")
+else if (not (vars.currentCustomer.customerEmail matches /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/))
+    error("Invalid email format: " ++ vars.currentCustomer.customerEmail)
+else if (sizeOf(vars.currentCustomer.customerEmail) > 254)
+    error("customerEmail exceeds maximum length of 254 characters")
+else payload]]></ee:set-payload>
+                    </ee:message>
+                </ee:transform>
+
+                <snowflake:select config-ref="Snowflake_Config" target="existingCustomer"
+                    doc:name="Check Customer Exists by Email"
+                    doc:description="Queries CUSTOMERS.CUSTOMER_EMAIL — returns empty array if new, 1-row array if exists">
+                    <snowflake:sql><![CDATA[SELECT CUSTOMER_EMAIL FROM CUSTOMER WHERE CUSTOMER_EMAIL = :customerEmail LIMIT 1]]></snowflake:sql>
+                    <snowflake:input-parameters><![CDATA[#[{customerEmail: vars.currentCustomer.customerEmail}]]]></snowflake:input-parameters>
+                </snowflake:select>
+
+                <choice doc:name="Customer Exists in Snowflake?"
+                    doc:description="Routes to UPDATE (array size > 0) or INSERT (empty array)">
+                    <when expression="#[not isEmpty(vars.existingCustomer)]"
+                        doc:name="Customer Exists — UPDATE"
+                        doc:description="Updates all fields for matching CUSTOMER_EMAIL">
+                        <snowflake:update config-ref="Snowflake_Config"
+                            doc:name="Update Customer in Snowflake"
+                            doc:description="Updates FIRST_NAME, LAST_NAME, CONTACT_NUMBER, ADDRESS, LOCATION where CUSTOMER_EMAIL matches">
+                            <snowflake:sql><![CDATA[UPDATE CUSTOMER SET FIRST_NAME = :firstName, LAST_NAME = :lastName, CONTACT_NUMBER = :contactNumber, ADDRESS = :address, LOCATION = :location WHERE CUSTOMER_EMAIL = :customerEmail]]></snowflake:sql>
+                            <snowflake:input-parameters><![CDATA[#[{customerEmail: vars.currentCustomer.customerEmail, firstName: vars.currentCustomer.firstName, lastName: vars.currentCustomer.lastName, contactNumber: vars.currentCustomer.contactNumber default "", address: vars.currentCustomer.address default "", location: vars.currentCustomer.location default ""}]]]></snowflake:input-parameters>
+                        </snowflake:update>
+                    </when>
+                    <otherwise doc:name="Customer New — INSERT"
+                        doc:description="Inserts new row into CUSTOMERS for new customerEmail">
+                        <snowflake:insert config-ref="Snowflake_Config"
+                            doc:name="Insert New Customer into Snowflake"
+                            doc:description="Inserts CUSTOMER_EMAIL, FIRST_NAME, LAST_NAME, CONTACT_NUMBER, ADDRESS, LOCATION">
+                            <snowflake:sql><![CDATA[INSERT INTO CUSTOMER (CUSTOMER_EMAIL, FIRST_NAME, LAST_NAME, CONTACT_NUMBER, ADDRESS, LOCATION) VALUES (:customerEmail, :firstName, :lastName, :contactNumber, :address, :location)]]></snowflake:sql>
+                            <snowflake:input-parameters><![CDATA[#[{customerEmail: vars.currentCustomer.customerEmail, firstName: vars.currentCustomer.firstName, lastName: vars.currentCustomer.lastName, contactNumber: vars.currentCustomer.contactNumber default "", address: vars.currentCustomer.address default "", location: vars.currentCustomer.location default ""}]]]></snowflake:input-parameters>
+                        </snowflake:insert>
+                    </otherwise>
+                </choice>
+
+                <ee:transform doc:name="Build Success Result"
+                    doc:description="Returns customerEmail + status=Success + empty message">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{customerEmail: vars.currentCustomer.customerEmail, status: "Success", message: ""}]]></ee:set-payload>
+                    </ee:message>
+                </ee:transform>
+
+                <error-handler>
+                    <on-error-continue type="MULE:ANY"
+                        doc:name="On Error Continue — Capture Failure"
+                        doc:description="Captures Snowflake/processing errors as Failure result; other parallel records continue">
+                        <logger level="ERROR"
+                            message="#[%dw 2.0 output application/json&#10;---&#10;'[p-customers-api] Record failed | correlationId=' ++ vars.correlationId ++ ' | errorType=' ++ error.description]"
+                            doc:name="Log Record Failure"
+                            doc:description="Logs failure with errorType only — email omitted for GDPR compliance" />
+                        <ee:transform doc:name="Build Failure Result"
+                            doc:description="Returns customerEmail + status=Failure + error description as message">
+                            <ee:message>
+                                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{customerEmail: vars.currentCustomer.customerEmail default "unknown", status: "Failure", message: error.description default "An unexpected error occurred"}]]></ee:set-payload>
+                            </ee:message>
+                        </ee:transform>
+                    </on-error-continue>
+                </error-handler>
+
+            </try>
+        </parallel-foreach>
+
+        <ee:transform doc:name="Consolidate Results and Extract Failures"
+            doc:description="Builds final response array; extracts failures; sets httpStatus 207 if any failures">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+payload]]></ee:set-payload>
+            </ee:message>
+            <ee:variables>
+                <ee:set-variable variableName="failures"><![CDATA[%dw 2.0
+output application/json
+---
+payload filter (item) -> item.payload.status == "Failure"]]></ee:set-variable>
+                <ee:set-variable variableName="httpStatus"><![CDATA[%dw 2.0
+output application/java
+---
+if (sizeOf(payload filter (item) -> item.status == "Failure") > 0) 207 else 200]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+
+        <logger level="INFO"
+            message="#[%dw 2.0 output application/json&#10;---&#10;'[p-customers-api] Processing complete | correlationId=' ++ vars.correlationId ++ ' | total=' ++ sizeOf(payload) ++ ' | failures=' ++ sizeOf(vars.failures)]"
+            doc:name="Log Processing Summary"
+            doc:description="Logs total vs failures count with correlationId for monitoring" />
+
+        <choice doc:name="Any Failures?"
+            doc:description="Sends SMTPS email alert if any failures; skips otherwise">
+            <when expression="#[sizeOf(vars.failures) > 0]"
+                doc:name="Has Failures — Send Email Alert"
+                doc:description="Dispatches failure notification with failure-records.json attachment">
+                <logger level="WARN"
+                    message="#[%dw 2.0 output application/json&#10;---&#10;'[p-customers-api] Failures detected, sending alert | correlationId=' ++ vars.correlationId ++ ' | failureCount=' ++ sizeOf(vars.failures)]"
+                    doc:name="Log Failures Alert"
+                    doc:description="Logs warning before email dispatch" />
+                <set-variable variableName="safeCorrelationId"
+                    value="#[vars.correlationId replace /[^a-zA-Z0-9\-]/ with '']"
+                    doc:name="Sanitize correlationId"
+                    doc:description="Strips non-alphanumeric chars from correlationId to prevent email header injection" />
+                <!-- [STUDIO:"Send Failure Notification Email"]<email:send config-ref="Email_SMTP_Config"
+                    subject="#['${email.smtp.subject} | correlationId: ' ++ vars.safeCorrelationId&#93;"
+                    doc:name="Send Failure Notification Email"
+                    doc:description="Sends SMTPS email to ops team with failure records as JSON attachment">
+                    <email:to-addresses>
+                        <email:to-address value="${email.smtp.to}" />
+                    </email:to-addresses>
+                    <email:body contentType="text/plain" encoding="UTF-8">
+                        <email:content><![CDATA[Customer upsert failures in p-customers-api (Snowflake CUSTOMERS_DB).
+Correlation ID: #[vars.correlationId&#93;
+Total: #[sizeOf(payload)&#93; | Failed: #[sizeOf(vars.failures)&#93;
+See attached failure-records.json for details.&#93;&#93;></email:content>
+                    </email:body>
+                    <email:attachments><![CDATA[#[output application/json &#45;&#45;- vars.failure&#93;&#93;&#93;></email:attachments>
+                </email:send> [STUDIO] -->
+				<logger level="INFO" doc:name="Send Failure Email Notification " doc:id="cf812735-5d6c-4305-9503-689349797420" message="Send Failure Email Notification "/>
+            
+</when>
+            <otherwise doc:name="All Success — No Alert"
+                doc:description="Skips email when all records succeeded">
+                <logger level="INFO"
+                    message="#[%dw 2.0 output application/json&#10;---&#10;'[p-customers-api] All records processed successfully | correlationId=' ++ vars.correlationId]"
+                    doc:name="Log All Success"
+                    doc:description="Confirms successful batch with no failures" />
+            </otherwise>
+        </choice>
+
+        <error-handler ref="global-error-handler"
+            doc:name="Global Error Handler Ref"
+            doc:description="Delegates unhandled flow errors to the global error handler" />
+
+    </flow>
+
+</mule>

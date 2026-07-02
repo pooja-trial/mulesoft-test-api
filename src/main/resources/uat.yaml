@@ -1,0 +1,38 @@
+http:
+  listener:
+    host: "0.0.0.0"
+    port: "8081"
+    basePath: "/api"
+
+db:
+  host: "uat-db-host.mycompany.com"
+  port: "3306"
+  user: "uat_user"
+  # password: defined in uat-secure.yaml — never store plaintext credentials here (SAST-001)
+  database: "customers_db"
+  poolSize: "10"
+  pool:
+    minSize: "2"
+    maxSize: "15"
+    maxWait: "5000"
+    maxIdleTime: "60000"
+
+email:
+  smtp:
+    host: "smtp.mycompany.com"
+    port: "465"
+    user: "integration-uat@mycompany.com"
+    # password: defined in uat-secure.yaml — never store plaintext credentials here (SAST-001)
+    from: "integration-uat@mycompany.com"
+    to: "ops-team@mycompany.com"
+    subject: "p-customers-api | Customer Upsert Failure"
+    tls:
+      insecure: "false"   # UAT/PROD: must be false with proper trust-store configured (SAST-002)
+
+# SECURITY NOTES (UAT environment):
+# - TLS insecure=true must be FALSE in UAT. Configure tls:trust-store with actual SMTP cert chain.
+# - HTTP listener must be behind HTTPS-terminating Flex Gateway or load balancer in UAT.
+# - Client ID Enforcement policy MUST be applied in Anypoint API Manager for UAT.
+max:
+  batch:
+    size: "100"
