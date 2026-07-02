@@ -1,0 +1,59 @@
+# ============================================================
+# SAST-014: Security-critical .gitignore for p-customers-api
+# ============================================================
+
+# CRITICAL: Never commit secure property files with encrypted or plaintext credentials
+*-secure.yaml
+*.secure.yaml
+*.secure.properties
+local.secure.properties
+local.properties
+*.key
+*.jks
+*.p12
+*.pfx
+*.pem
+*.crt
+*.cer
+*.truststore
+*.keystore
+
+# Maven build output
+target/
+*.jar
+*.war
+*.ear
+
+# IDE files
+.idea/
+*.iml
+.classpath
+.project
+.settings/
+.vscode/settings.json
+.vscode/launch.json
+
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Mule runtime (large binary — install separately)
+.mule/
+mule-runtime/
+
+# Local environment overrides (may contain real endpoints)
+local.yaml
+local-*.yaml
+
+# Coverage reports (generated artifacts)
+coverage/
+
+# ============================================================
+# NOTE: *-secure.yaml files should be distributed via:
+# - Anypoint Runtime Manager "Properties" tab (CloudHub 2.0)
+# - Kubernetes Secrets (RTF)
+# - A secrets manager (HashiCorp Vault, AWS Secrets Manager)
+# NEVER store them in source control, even when encrypted.
+# ============================================================
